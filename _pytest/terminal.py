@@ -363,6 +363,8 @@ class TerminalReporter:
         if exitstatus in summary_exit_codes:
             self.config.hook.pytest_terminal_summary(terminalreporter=self,
                                                      exitstatus=exitstatus)
+            self.config.hook.pytest_terminal_timestats(terminalreporter=self,
+                                                     exitstatus=exitstatus)
             self.summary_errors()
             self.summary_failures()
             self.summary_warnings()

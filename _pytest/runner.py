@@ -6,6 +6,7 @@ from time import time
 import py
 import pytest
 from _pytest._code.code import TerminalRepr, ExceptionInfo
+import collections
 
 
 def pytest_namespace():
@@ -24,8 +25,12 @@ def pytest_addoption(parser):
     group.addoption('--durations',
          action="store", type=int, default=None, metavar="N",
          help="show N slowest setup/test durations (N=0 for all)."),
+    group.addoption('--timestats', type=str, default=None, metavar="M",
+         help="show total time spent on tests that match"
+              " the list of markers M = 'm1 m2 etc'")
 
 def pytest_terminal_summary(terminalreporter):
+    _check_timestats_option(terminalreporter)
     durations = terminalreporter.config.option.durations
     if durations is None:
         return
@@ -49,6 +54,31 @@ def pytest_terminal_summary(terminalreporter):
         nodeid = rep.nodeid.replace("::()::", "::")
         tr.write_line("%02.2fs %-8s %s" %
             (rep.duration, rep.when, nodeid))
+
+def _check_timestats_option(terminalreporter):
+    tr = terminalreporter
+    markers = terminalreporter.config.option.timestats
+    if markers is None:
+        return
+    marker_list = markers.split()
+    mark_stats = {}
+    mark_stats = collections.defaultdict(dict)
+
+    for replist in tr.stats.values():
+        for rep in replist:
+            if hasattr(rep, 'keywords'):
+                for mark in marker_list:
+                    if ((not mark in mark_stats)
+                        or (not rep.keywords.get(mark) in mark_stats[mark])):
+                        mark_stats[mark][rep.keywords.get(mark)] = 0
+                    else:
+                        mark_stats[mark][rep.keywords.get(mark)] += rep.duration
+
+    tr.write_sep("=", "Execution time categorized by the following markers")
+    for k, v in mark_stats.items():
+        tr.write_line("*** %s ***" % k)
+        for kk, vv in v.items():
+            tr.write_line("%02.2fs %s %s" % (vv, k, kk))
 
 def pytest_sessionstart(session):
     session._setupstate = SetupState()
@@ -252,7 +282,13 @@ class BaseReport(object):
 def pytest_runtest_makereport(item, call):
     when = call.when
     duration = call.stop-call.start
-    keywords = dict([(x,1) for x in item.keywords])
+    keywords = {}
+    for x in item.keywords:
+        mark = item.get_marker(x)
+        if mark and mark.args:
+            keywords[x] = mark.args[0]
+        else:
+            keywords[x] = 1
     excinfo = call.excinfo
     sections = []
     if not call.excinfo:
