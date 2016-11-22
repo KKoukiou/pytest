@@ -3,9 +3,12 @@ import bdb
 import sys
 from time import time
 
+import collections
+import os
 import py
 import pytest
 from _pytest._code.code import TerminalRepr, ExceptionInfo
+import yaml
 
 
 def pytest_namespace():
@@ -22,10 +25,18 @@ def pytest_namespace():
 def pytest_addoption(parser):
     group = parser.getgroup("terminal reporting", "reporting", after="general")
     group.addoption('--durations',
-         action="store", type=int, default=None, metavar="N",
-         help="show N slowest setup/test durations (N=0 for all)."),
+                    action="store", type=int, default=None, metavar="N",
+                    help="show N slowest setup/test durations (N=0 for all).")
+    group.addoption('--timestats', type=str, default=None, metavar="M",
+                    help="show total time spent on tests that match"
+                    " the list of markers M = 'm1 m2 etc'")
+    group.addoption('--timestatsfile', type=str, default=None, metavar="path",
+                    help="create a yaml style report file at given path"
+                    "(only valid when timestats option is enabled)")
+
 
 def pytest_terminal_summary(terminalreporter):
+    _check_timestats_option(terminalreporter)
     durations = terminalreporter.config.option.durations
     if durations is None:
         return
@@ -48,7 +59,39 @@ def pytest_terminal_summary(terminalreporter):
     for rep in dlist:
         nodeid = rep.nodeid.replace("::()::", "::")
         tr.write_line("%02.2fs %-8s %s" %
-            (rep.duration, rep.when, nodeid))
+                      (rep.duration, rep.when, nodeid))
+
+def _check_timestats_option(terminalreporter):
+    """ Help function to implement timestats option functionality """
+    tr = terminalreporter
+    markers = terminalreporter.config.option.timestats
+    if markers is None:
+        return
+    marker_list = markers.split()
+
+    statistics = []
+    for replist in tr.stats.values():
+        for rep in replist:
+            if hasattr(rep, 'keywords'):
+                mrk = {}
+                for mark in marker_list:
+                    if rep.keywords.get(mark):
+                        mrk[mark] = rep.keywords.get(mark)
+                mrk["duration"] = "%.2f" % rep.duration
+                mrk["testname"] = rep.nodeid
+                statistics.append(mrk)
+    output = yaml.dump(statistics,
+                       explicit_start=True,
+                       default_flow_style=False)
+    logfile = terminalreporter.config.option.timestatsfile
+    if logfile is None:
+        tr.write_line(output)
+        return
+    dirname = os.path.dirname(os.path.abspath(logfile))
+    if not os.path.isdir(dirname):
+        os.makedirs(dirname)
+    logfile = open(logfile, 'w')
+    logfile.write(output)
 
 def pytest_sessionstart(session):
     session._setupstate = SetupState()
@@ -252,7 +295,13 @@ class BaseReport(object):
 def pytest_runtest_makereport(item, call):
     when = call.when
     duration = call.stop-call.start
-    keywords = dict([(x,1) for x in item.keywords])
+    keywords = {}
+    for x in item.keywords:
+        mark = item.get_marker(x)
+        if mark and mark.args:
+            keywords[x] = mark.args[0]
+        else:
+            keywords[x] = 1
     excinfo = call.excinfo
     sections = []
     if not call.excinfo:
