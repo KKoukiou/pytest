@@ -273,6 +273,8 @@ class LogXML(object):
         self.node_reporters = {}  # nodeid -> _NodeReporter
         self.node_reporters_ordered = []
         self.global_properties = []
+        self.open_reports = []
+        self.cnt_double_fail_tests = 0
 
     def finalize(self, report):
         nodeid = getattr(report, 'nodeid', report)
@@ -337,9 +339,17 @@ class LogXML(object):
                 reporter = self._opentestcase(report)
                 reporter.append_pass(report)
         elif report.failed:
+            if report.when == "teardown":
+                restart_rep = None
+                close_report = next((rep for rep in self.open_reports if rep.nodeid == report.nodeid), None)
+                if close_report:
+                    self.finalize(close_report)
+                    self.open_reports.remove(close_report)
+                    self.cnt_double_fail_tests += 1
             reporter = self._opentestcase(report)
             if report.when == "call":
                 reporter.append_failure(report)
+                self.open_reports.append(report)
             else:
                 reporter.append_error(report)
         elif report.skipped:
@@ -380,8 +390,9 @@ class LogXML(object):
         suite_stop_time = time.time()
         suite_time_delta = suite_stop_time - self.suite_start_time
 
-        numtests = self.stats['passed'] + self.stats['failure'] + self.stats['skipped'] + self.stats['error']
-
+        numtests = (self.stats['passed'] + self.stats['failure'] +
+                    self.stats['skipped'] + self.stats['error'] -
+                    self.cnt_double_fail_tests)
         logfile.write('<?xml version="1.0" encoding="utf-8"?>')
 
         logfile.write(Junit.testsuite(
